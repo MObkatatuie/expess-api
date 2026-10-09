@@ -2,6 +2,8 @@ import express from "express";
 import { router as index } from "./controller/index";
 import { router as customers } from "./controller/customers";
 import { router as orders } from "./controller/orders";
+import { router as dispatch } from "./controller/dispatch";
+import { router as jobs } from "./controller/jobs";
 
 export const app = express();
 
@@ -10,6 +12,8 @@ app.use(express.json());
 app.use("/", index);
 app.use("/api/customers", customers);
 app.use("/api/orders", orders);
+app.use("/api/dispatch", dispatch);
+app.use("/api/jobs", jobs);
 
 app.use((_req, res) => res.status(404).json({ error: "ไม่พบ endpoint นี้" }));
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

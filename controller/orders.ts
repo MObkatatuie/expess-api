@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { ResultSetHeader } from "mysql2";
-import { pool, getSetting } from "../db";
+import { pool, RULES } from "../db";
 import { boundingBox, haversineKm, parseCoord } from "../geo";
 
 export const router = Router();
 
-const MAX_BOXES = 3; // ออร์เดอร์หนึ่งสั่งได้ไม่เกิน 3 กล่อง (ตามโจทย์)
+const MAX_BOXES = RULES.MAX_BOXES_PER_ORDER; // ออร์เดอร์หนึ่งสั่งได้ไม่เกิน 3 กล่อง (ตามโจทย์)
+const PRICE = RULES.BOX_PRICE;
 
 type OrderRow = {
   order_id: number;
@@ -14,6 +15,8 @@ type OrderRow = {
   quantity_boxes: number;
   status: string;
   is_mock: number;
+  route_id: number | null;
+  stop_seq: number | null;
   first_name: string;
   last_name: string;
   phone: string | null;
@@ -32,6 +35,8 @@ function format(o: OrderRow, price: number) {
     order_date: o.order_date,
     status: o.status,
     is_mock: !!o.is_mock,
+    route_id: o.route_id,
+    stop_seq: o.route_id === null ? null : o.stop_seq, // ลำดับจุดส่งมีความหมายเมื่ออยู่ในใบงานเท่านั้น
     quantity_boxes: o.quantity_boxes,
     total_price: o.quantity_boxes * price,
     customer: {
@@ -48,7 +53,7 @@ function format(o: OrderRow, price: number) {
 const getOrder = async (id: number | string) => {
   const [rows] = await pool.query(`${ORDER_SELECT} WHERE o.order_id = ?`, [id]);
   const row = (rows as OrderRow[])[0];
-  return row ? format(row, await getSetting("box_price")) : undefined;
+  return row ? format(row, PRICE) : undefined;
 };
 
 const getBasic = async (id: string) => {
@@ -104,7 +109,7 @@ router.get("/nearby", async (req, res) => {
     `${ORDER_SELECT} WHERE c.latitude BETWEEN ? AND ? AND c.longitude BETWEEN ? AND ?`,
     [b.minLat, b.maxLat, b.minLng, b.maxLng]
   );
-  const price = await getSetting("box_price");
+  const price = PRICE;
   const data = (rows as OrderRow[])
     .map((o) => ({
       ...format(o, price),
@@ -119,7 +124,7 @@ router.get("/nearby", async (req, res) => {
 // GET /api/orders
 router.get("/", async (_req, res) => {
   const [rows] = await pool.query(`${ORDER_SELECT} ORDER BY o.order_id`);
-  const price = await getSetting("box_price");
+  const price = PRICE;
   const data = (rows as OrderRow[]).map((o) => format(o, price));
   res.json({
     count: data.length,
