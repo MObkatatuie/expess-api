@@ -14,9 +14,11 @@ router.get("/", (_req, res) => {
       "/api/orders/mock",
       "/api/orders/nearby?lat=&lng=",
       "/api/orders/:id/boxes",
+      "DELETE /api/orders/real",
       "POST /api/dispatch/plans?count=3",
       "POST /api/dispatch/confirm",
       "GET /api/dispatch/current",
+      "DELETE /api/dispatch/current",
       "GET /api/jobs/:job_code",
     ],
   });

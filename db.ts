@@ -193,3 +193,11 @@ export async function initDb() {
     }
   }
 }
+
+/** ลบใบงานที่ไม่เหลือออร์เดอร์แล้ว (หลังลบออร์เดอร์) คืนจำนวนใบงานที่ลบ */
+export async function cleanupEmptyRoutes(): Promise<number> {
+  const [info] = await pool.query(
+    "DELETE FROM delivery_routes WHERE route_id NOT IN (SELECT route_id FROM (SELECT DISTINCT route_id FROM orders WHERE route_id IS NOT NULL) t)"
+  );
+  return (info as { affectedRows: number }).affectedRows;
+}

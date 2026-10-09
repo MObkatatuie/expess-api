@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { ResultSetHeader } from "mysql2";
-import { pool, RULES } from "../db";
+import { pool, RULES, cleanupEmptyRoutes } from "../db";
 import { boundingBox, haversineKm, parseCoord } from "../geo";
 
 export const router = Router();
@@ -96,7 +96,15 @@ router.post("/mock", async (req, res) => {
 // DELETE /api/orders/mock  -> ล้างรายการสั่งซื้อที่จำลองทั้งหมด
 router.delete("/mock", async (_req, res) => {
   const [info] = await pool.query<ResultSetHeader>("DELETE FROM orders WHERE is_mock = 1");
-  res.json({ message: "ล้างรายการสั่งซื้อที่จำลองทั้งหมดแล้ว", deleted_orders: info.affectedRows });
+  const routes = await cleanupEmptyRoutes();
+  res.json({ message: "ล้างรายการสั่งซื้อที่จำลองทั้งหมดแล้ว", deleted_orders: info.affectedRows, deleted_routes: routes });
+});
+
+// DELETE /api/orders/real  -> ลบออร์เดอร์ที่ไม่ใช่ข้อมูลจำลองทั้งหมด (ออร์เดอร์จำลองและลูกค้าไม่ถูกลบ)
+router.delete("/real", async (_req, res) => {
+  const [info] = await pool.query<ResultSetHeader>("DELETE FROM orders WHERE is_mock = 0");
+  const routes = await cleanupEmptyRoutes();
+  res.json({ message: "ลบออร์เดอร์ที่ไม่ใช่ข้อมูลจำลองทั้งหมดแล้ว", deleted_orders: info.affectedRows, deleted_routes: routes });
 });
 
 // GET /api/orders/nearby?lat=..&lng=..  -> ออร์เดอร์ทั้งหมดในระยะ 2 กม. (วัดจากพิกัดบ้านลูกค้าที่สั่ง)
@@ -175,6 +183,7 @@ router.put("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   const [info] = await pool.query<ResultSetHeader>("DELETE FROM orders WHERE order_id = ?", [req.params.id]);
   if (info.affectedRows === 0) return res.status(404).json({ error: "ไม่พบออร์เดอร์" });
+  await cleanupEmptyRoutes();
   res.json({ message: "ลบออร์เดอร์เรียบร้อย", order_id: Number(req.params.id) });
 });
 

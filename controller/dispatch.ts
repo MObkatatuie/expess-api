@@ -146,3 +146,24 @@ router.get("/current", async (_req, res) => {
     routes: plan.routes.map((r, i) => ({ job_code: groups[i]!.job_code, ...r })),
   });
 });
+
+// DELETE /api/dispatch/current  -> ยกเลิกแผนที่บันทึกไว้: ลบใบงานทั้งหมด ออร์เดอร์กลับเป็น pending (ข้อมูลออร์เดอร์ยังอยู่)
+router.delete("/current", async (_req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [o] = await conn.query<ResultSetHeader>(
+      "UPDATE orders SET route_id = NULL, stop_seq = NULL, status = 'pending' WHERE status = 'assigned' OR route_id IS NOT NULL"
+    );
+    const [r] = await conn.query<ResultSetHeader>("DELETE FROM delivery_routes");
+    await conn.commit();
+    if (r.affectedRows === 0 && o.affectedRows === 0)
+      return res.status(404).json({ error: "ยังไม่มีแผนที่บันทึกไว้" });
+    res.json({ message: "ยกเลิกแผนจัดส่งแล้ว", deleted_routes: r.affectedRows, orders_reset: o.affectedRows });
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+});
