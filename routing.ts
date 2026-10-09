@@ -46,8 +46,21 @@ function pathKm(stops: DispatchOrder[]): number {
   return km;
 }
 
+// แคชผลคำนวณ (ล้างทุกครั้งที่เรียก buildPlans) ช่วยให้เร็วขึ้นมากบนเซิร์ฟเวอร์ฟรี
+const bestCache = new Map<string, DispatchOrder[]>();
+const feeCache = new Map<string, number>();
+const idKey = (stops: DispatchOrder[]) => stops.map((o) => o.order_id).join(",");
+
 /** จุดไม่เกิน 3 จุด ลองทุกลำดับ (สูงสุด 6 แบบ) แล้วเลือกลำดับที่ระยะสั้นที่สุด */
 function bestOrder(stops: DispatchOrder[]): DispatchOrder[] {
+  const key = stops.map((o) => o.order_id).sort((a, b) => a - b).join(",");
+  const hit = bestCache.get(key);
+  if (hit) return hit;
+  const best = bestOrderUncached(stops);
+  bestCache.set(key, best);
+  return best;
+}
+function bestOrderUncached(stops: DispatchOrder[]): DispatchOrder[] {
   const perms = (xs: DispatchOrder[]): DispatchOrder[][] =>
     xs.length <= 1 ? [xs] : xs.flatMap((x, i) => perms([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]));
   let best = stops;
@@ -61,8 +74,13 @@ function bestOrder(stops: DispatchOrder[]): DispatchOrder[] {
 
 /** ค่าจ้างไรเดอร์ 1 รอบ = 15 บาท + 2 บาท x กม. x จำนวนกล่องที่ถือ */
 function riderFee(stops: DispatchOrder[]): number {
+  const key = idKey(stops);
+  const hit = feeCache.get(key);
+  if (hit !== undefined) return hit;
   const boxes = stops.reduce((s, o) => s + o.quantity_boxes, 0);
-  return RULES.RIDER_CALL_FEE + RULES.RATE_PER_KM_BOX * pathKm(stops) * boxes;
+  const fee = RULES.RIDER_CALL_FEE + RULES.RATE_PER_KM_BOX * pathKm(stops) * boxes;
+  feeCache.set(key, fee);
+  return fee;
 }
 const planCost = (groups: DispatchOrder[][]) => groups.reduce((s, g) => s + riderFee(g), 0);
 
@@ -84,14 +102,14 @@ function improve(groups: DispatchOrder[][], maxGroups: number): DispatchOrder[][
   let improved = true;
   while (improved) {
     improved = false;
-    for (let i = 0; i < g.length && !improved; i++) {
-      for (let a = 0; a < g[i]!.length && !improved; a++) {
+    for (let i = 0; !improved && i < g.length; i++) {
+      for (let a = 0; !improved && a < g[i]!.length; a++) {
         const o = g[i]![a]!;
         const without = g[i]!.filter((_, k) => k !== a);
         const baseI = riderFee(g[i]!);
         const newI = without.length ? riderFee(bestOrder(without)) : 0;
         // ย้ายไปกลุ่มอื่น หรือแยกเป็นไรเดอร์คนใหม่ (j === g.length)
-        for (let j = 0; j <= g.length && !improved; j++) {
+        for (let j = 0; !improved && j <= g.length; j++) {
           if (j === i) continue;
           if (j === g.length && (g.length >= maxGroups || without.length === 0)) continue;
           const target = j < g.length ? g[j]! : [];
@@ -109,7 +127,7 @@ function improve(groups: DispatchOrder[][], maxGroups: number): DispatchOrder[][
           }
           // สลับออร์เดอร์ 1 ต่อ 1
           if (!improved && j < g.length) {
-            for (let b = 0; b < g[j]!.length && !improved; b++) {
+            for (let b = 0; !improved && b < g[j]!.length; b++) {
               const gi = bestOrder([...without, g[j]![b]!]);
               const gj = bestOrder([...g[j]!.filter((_, k) => k !== b), o]);
               const delta = riderFee(gi) + riderFee(gj) - baseI - riderFee(g[j]!);
@@ -236,6 +254,8 @@ const longestMin = (groups: DispatchOrder[][]) =>
  * แล้วเลือกแผนที่ต่างกันจริงมาเสนอ: ประหยัดที่สุด, ส่งเสร็จเร็วที่สุด, ใช้ไรเดอร์น้อยที่สุด, ตามด้วยแผนถูกรองลงมา
  */
 export function buildPlans(orders: DispatchOrder[], riders: Rider[], seed: number, count: number) {
+  bestCache.clear();
+  feeCache.clear();
   const rand = rng(seed);
   const maxGroups = riders.length;
   const minGroups = Math.ceil(orders.length / RULES.MAX_ORDERS_PER_RIDER);
