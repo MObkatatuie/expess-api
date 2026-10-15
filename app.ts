@@ -4,9 +4,11 @@ import { router as customers } from "./controller/customers";
 import { router as orders } from "./controller/orders";
 import { router as dispatch } from "./controller/dispatch";
 import { router as jobs } from "./controller/jobs";
+import cors from "cors";
 
 export const app = express();
 
+app.use(cors());
 app.use(express.json());
 
 app.use("/", index);
