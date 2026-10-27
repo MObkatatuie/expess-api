@@ -42,7 +42,7 @@ export const CENTER = { lat: 16.24486, lng: 103.24784 };
 const OLD_CENTER = { lat: 16.19944, lng: 103.28389 };
 
 // ลูกค้าตัวอย่าง: [ชื่อ, นามสกุล, เบอร์, ที่อยู่, ระยะเหนือ(+)/ใต้(-) เป็นองศา, ระยะตะวันออก(+)/ตะวันตก(-) เป็นองศา]
-const SAMPLE_CUSTOMERS: [string, string, string, string, number, number][] = [
+const LEGACY_SAMPLE_CUSTOMERS: [string, string, string, string, number, number][] = [
   ["สมชาย", "ใจดี", "0811111111", "หอพักใกล้ มมส. ต.ขามเรียง", 0.003, 0.002],
   ["สมหญิง", "รักเรียน", "0822222222", "ต.ขามเรียง อ.กันทรวิชัย", 0.004, -0.003],
   ["วิชัย", "มั่นคง", "0833333333", "ต.ขามเรียง อ.กันทรวิชัย", -0.006, 0.005],
@@ -58,6 +58,24 @@ const SAMPLE_CUSTOMERS: [string, string, string, string, number, number][] = [
 ];
 const at = (c: { lat: number; lng: number }, dLat: number, dLng: number) =>
   [+(c.lat + dLat).toFixed(6), +(c.lng + dLng).toFixed(6)] as const;
+
+// พิกัดหอพักจริงจากแหล่งข้อมูลสาธารณะ ตรวจเมื่อ 2026-10-28 (ดู SAMPLE_CUSTOMER_LOCATIONS.md)
+// ชื่อและเบอร์ลูกค้าเป็นข้อมูลสมมติ ไม่ใช่ข้อมูลผู้พักอาศัยจริง
+// [ชื่อ, นามสกุล, เบอร์, หอพัก, latitude, longitude] — พิกัดสัมบูรณ์ ไม่ใช่ offset
+const SAMPLE_CUSTOMERS: [string, string, string, string, number, number][] = [
+  ["สมชาย","ใจดี","0811111111","เน้นนี่เพลส อ.กันทรวิชัย จ.มหาสารคาม",16.2440687,103.2415747],
+  ["สมหญิง","รักเรียน","0822222222","หอพักสตรีร่มฉัตร อ.กันทรวิชัย จ.มหาสารคาม",16.25168,103.23907],
+  ["วิชัย","มั่นคง","0833333333","หอพักทิฆัมพร 2 อ.กันทรวิชัย จ.มหาสารคาม",16.23614,103.25479],
+  ["มานี","มีตา","0844444444","หอพักหญิงสมสิริ อ.กันทรวิชัย จ.มหาสารคาม",16.24998,103.23981],
+  ["ปิติ","ชูใจ","0855555555","หอพักอันวิชา อ.กันทรวิชัย จ.มหาสารคาม",16.25314,103.24244],
+  ["ชูใจ","สุขสันต์","0866666666","หอพักหญิงบุปผา อ.กันทรวิชัย จ.มหาสารคาม",16.25372,103.23281],
+  ["อารี","ดีงาม","0877777777","หอพักหญิงสุมลรัตน์ อ.กันทรวิชัย จ.มหาสารคาม",16.23659,103.26222],
+  ["ธนา","พัฒนา","0888888888","หอพักสินทรัพย์ทวีคูณ อ.กันทรวิชัย จ.มหาสารคาม",16.23793,103.26136],
+  ["นภา","ฟ้าใส","0899999999","หอพักลัดดา อ.กันทรวิชัย จ.มหาสารคาม",16.25131,103.23895],
+  ["กานต์","ศรีสุข","0800000000","หอพักเดอะเฮอริเทจ อ.กันทรวิชัย จ.มหาสารคาม",16.23361,103.25552],
+  ["สุดา","แสงทอง","0811110000","หอพักสามใบเถา อ.กันทรวิชัย จ.มหาสารคาม",16.25183,103.23783],
+  ["บุญมา","เจริญสุข","0822220000","ฟอเรสท์อพาร์ทเมนท์ อ.กันทรวิชัย จ.มหาสารคาม",16.23549,103.2696],
+];
 
 // ค่าคงที่ตามโจทย์โปรเจกต์ (ไม่ต้องเก็บเป็นตาราง)
 export const RULES = {
@@ -102,6 +120,7 @@ const schema = [
     total_distance_km DOUBLE,
     total_time_min    DOUBLE,
     total_cost        DOUBLE,
+    road_snapshot     LONGTEXT NULL,
     created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_routes_rider FOREIGN KEY (rider_id) REFERENCES riders(rider_id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -166,6 +185,8 @@ export async function initDb() {
 
   for (const sql of schema) await pool.query(sql);
   await migrateFromOldSchema();
+  if (!(await hasColumn("delivery_routes", "road_snapshot")))
+    await pool.query("ALTER TABLE delivery_routes ADD COLUMN road_snapshot LONGTEXT NULL");
 
   if ((await count("riders")) === 0) {
     // ออร์เดอร์ 20-30 ใบ รับคนละไม่เกิน 3 ใบ => ต้องใช้ไรเดอร์อย่างน้อย 7-10 คนต่อรอบ จึงเตรียมไว้ 12 คน
@@ -178,17 +199,21 @@ export async function initDb() {
   }
 
   if ((await count("customers")) === 0) {
-    const data = SAMPLE_CUSTOMERS.map(([f, l, p, a, dLat, dLng]) => [f, l, p, a, ...at(CENTER, dLat, dLng)]);
+    const data = SAMPLE_CUSTOMERS;
     await pool.query("INSERT INTO customers (first_name,last_name,phone,address,latitude,longitude) VALUES ?", [data]);
   } else {
-    // ลูกค้าตัวอย่างที่สร้างด้วยพิกัดเดิม (ในตัวเมือง) -> ย้ายมารอบ ม.ใหม่ (ทำซ้ำได้ ไม่ย้ายซ้ำ)
-    for (const [, , phone, address, dLat, dLng] of SAMPLE_CUSTOMERS) {
-      const [oLat, oLng] = at(OLD_CENTER, dLat, dLng);
-      const [nLat, nLng] = at(CENTER, dLat, dLng);
+    // ย้ายเฉพาะลูกค้า seed ที่ยังใช้พิกัดเก่าทั้งรุ่น ม.เก่า และ ม.ใหม่
+    // ตรวจชื่อ+เบอร์+พิกัด เพื่อไม่ทับลูกค้าที่ผู้ใช้ย้ายตำแหน่งเอง; รันซ้ำไม่ย้ายซ้ำ
+    for (const [i, [firstName, lastName, phone, address, lat, lng]] of SAMPLE_CUSTOMERS.entries()) {
+      const legacy = LEGACY_SAMPLE_CUSTOMERS[i]!;
+      const [oldLat, oldLng] = at(OLD_CENTER, legacy[4], legacy[5]);
+      const [previousLat, previousLng] = at(CENTER, legacy[4], legacy[5]);
       await pool.query(
         `UPDATE customers SET latitude = ?, longitude = ?, address = ?
-         WHERE phone = ? AND ABS(latitude - ?) < 0.000001 AND ABS(longitude - ?) < 0.000001`,
-        [nLat, nLng, address, phone, oLat, oLng]
+         WHERE first_name = ? AND last_name = ? AND phone = ?
+           AND ((ABS(latitude - ?) < 0.000001 AND ABS(longitude - ?) < 0.000001)
+             OR (ABS(latitude - ?) < 0.000001 AND ABS(longitude - ?) < 0.000001))`,
+        [lat, lng, address, firstName, lastName, phone, oldLat, oldLng, previousLat, previousLng]
       );
     }
   }

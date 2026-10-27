@@ -1,5 +1,5 @@
 import { CENTER, RULES } from "./db";
-import { haversineKm } from "./geo";
+import type { RoadMatrix, RoadRoute } from "./road-network";
 
 // ---------- ตัวคำนวณเส้นทางจัดส่ง (ไม่แตะฐานข้อมูล) ----------
 
@@ -31,8 +31,9 @@ function rng(seed: number) {
   };
 }
 
+export function createPlanner(matrix: RoadMatrix) {
 const dist = (a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) =>
-  haversineKm(a.latitude, a.longitude, b.latitude, b.longitude);
+  matrix.leg(a, b).distance / 1000;
 const shopPt = { latitude: SHOP.lat, longitude: SHOP.lng };
 
 /** ระยะทางเมื่อวิ่งจากร้านไปตามลำดับจุด (ไม่นับขากลับ) */
@@ -46,7 +47,7 @@ function pathKm(stops: DispatchOrder[]): number {
   return km;
 }
 
-// แคชผลคำนวณ (ล้างทุกครั้งที่เรียก buildPlans) ช่วยให้เร็วขึ้นมากบนเซิร์ฟเวอร์ฟรี
+// แคชอยู่ภายใน planner แต่ละคำขอ ไม่แชร์ตารางถนนข้ามคำขอ
 const bestCache = new Map<string, DispatchOrder[]>();
 const feeCache = new Map<string, number>();
 const idKey = (stops: DispatchOrder[]) => stops.map((o) => o.order_id).join(",");
@@ -167,16 +168,19 @@ const deadlineMin = (() => {
 })();
 
 /** สร้างรายละเอียดแผน: เส้นทางแต่ละไรเดอร์ เวลา และเงิน */
-export function describePlan(groups: DispatchOrder[][], riders: Rider[]) {
+function describePlan(groups: DispatchOrder[][], riders: Rider[], roads?: RoadRoute[]) {
   const routes = groups.map((stops, idx) => {
     const rider = riders[idx]!;
     let km = 0;
+    let elapsed = 0;
     let prev: { latitude: number; longitude: number } = shopPt;
     const stopRows = stops.map((o, k) => {
-      const leg = dist(prev, o);
+      const segment = roads ? roads[idx]!.legs[k]! : matrix.leg(prev, o);
+      const leg = segment.distance / 1000;
       km += leg;
+      elapsed += segment.duration / 60;
       prev = o;
-      const min = (km / RULES.RIDER_SPEED_KMH) * 60;
+      const min = elapsed;
       return {
         seq: k + 1,
         order_id: o.order_id,
@@ -196,7 +200,7 @@ export function describePlan(groups: DispatchOrder[][], riders: Rider[]) {
       };
     });
     const boxes = stops.reduce((s, o) => s + o.quantity_boxes, 0);
-    const timeMin = (km / RULES.RIDER_SPEED_KMH) * 60;
+    const timeMin = elapsed;
     const revenue = boxes * RULES.BOX_PRICE;
     const foodCost = boxes * RULES.BOX_COST;
     const fee = RULES.RIDER_CALL_FEE + RULES.RATE_PER_KM_BOX * km * boxes;
@@ -206,6 +210,7 @@ export function describePlan(groups: DispatchOrder[][], riders: Rider[]) {
       boxes,
       distance_km: round(km),
       time_min: round(timeMin, 1),
+      duration_seconds: elapsed * 60,
       finish_time: clock(timeMin),
       on_time: timeMin <= deadlineMin,
       money: {
@@ -217,13 +222,14 @@ export function describePlan(groups: DispatchOrder[][], riders: Rider[]) {
         profit: round(revenue - foodCost - fee),
       },
       stops: stopRows,
-      // จุดสำหรับลากเส้นบนแผนที่: ร้าน -> จุดที่ 1 -> 2 -> 3
-      path: [[SHOP.lat, SHOP.lng], ...stops.map((o) => [o.latitude, o.longitude])],
+      // แนวถนนจาก OSRM เป็น [lat, lng] สำหรับ Leaflet
+      path: roads ? roads[idx]!.path : [] as [number, number][],
+      routing_source: "osrm" as const,
     };
   });
   const sum = (f: (r: (typeof routes)[number]) => number) => round(routes.reduce((s, r) => s + f(r), 0));
   const profit = sum((r) => r.money.profit);
-  const maxTime = Math.max(0, ...routes.map((r) => r.time_min));
+  const maxTime = Math.max(0, ...routes.map((r) => r.duration_seconds / 60));
   return {
     summary: {
       riders_used: routes.length,
@@ -246,14 +252,19 @@ export function describePlan(groups: DispatchOrder[][], riders: Rider[]) {
 }
 
 const longestMin = (groups: DispatchOrder[][]) =>
-  (Math.max(0, ...groups.map((g) => pathKm(g))) / RULES.RIDER_SPEED_KMH) * 60;
+  Math.max(0, ...groups.map(g => {
+    let previous = shopPt;
+    let minutes = 0;
+    for (const stop of g) { minutes += matrix.leg(previous, stop).duration / 60; previous = stop; }
+    return minutes;
+  }));
 
 /**
  * คำนวณหลายแผนจาก seed เดียวกัน (seed เดิม = ได้แผนเดิม)
  * สร้างแผนผู้สมัครหลายแบบ (sweep เริ่มมุมสุ่ม ขนาดกลุ่ม 2-3 ทั้งแบบปรับปรุงและไม่ปรับปรุง)
  * แล้วเลือกแผนที่ต่างกันจริงมาเสนอ: ประหยัดที่สุด, ส่งเสร็จเร็วที่สุด, ใช้ไรเดอร์น้อยที่สุด, ตามด้วยแผนถูกรองลงมา
  */
-export function buildPlans(orders: DispatchOrder[], riders: Rider[], seed: number, count: number) {
+function buildPlans(orders: DispatchOrder[], riders: Rider[], seed: number, count: number) {
   bestCache.clear();
   feeCache.clear();
   const rand = rng(seed);
@@ -284,7 +295,7 @@ export function buildPlans(orders: DispatchOrder[], riders: Rider[], seed: numbe
       picks.push({ label, groups: g });
     }
   };
-  pick("ประหยัดที่สุด (กำไรมากสุด)", byCost);
+  pick("แผนแนะนำตามระยะทางถนน", byCost);
   pick("ส่งเสร็จเร็วที่สุด", [...all].sort((a, b) => longestMin(a) - longestMin(b) || planCost(a) - planCost(b)));
   pick("ใช้ไรเดอร์น้อยที่สุด", [...all].sort((a, b) => a.length - b.length || planCost(a) - planCost(b)));
   while (picks.length < count && picks.length < all.length) pick("ทางเลือกอื่น (ประหยัดรองลงมา)", byCost);
@@ -294,9 +305,12 @@ export function buildPlans(orders: DispatchOrder[], riders: Rider[], seed: numbe
   } as const;
 }
 
+return { buildPlans, describePlan };
+}
+
 /** ลายเซ็นของชุดออร์เดอร์ ใช้ตรวจว่าออร์เดอร์เปลี่ยนไปหรือยังก่อนยืนยันแผน */
 export const ordersSignature = (orders: DispatchOrder[]) =>
   orders
-    .map((o) => `${o.order_id}:${o.quantity_boxes}:${o.latitude}:${o.longitude}`)
+    .map((o) => JSON.stringify([o.order_id, o.customer_id, o.quantity_boxes, o.latitude, o.longitude, o.first_name, o.last_name, o.phone, o.address]))
     .sort()
     .join(",");

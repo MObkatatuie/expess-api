@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { CENTER, RULES, pool } from "../db";
-import { describePlan, type DispatchOrder } from "../routing";
+import type { DispatchOrder } from "../routing";
+import { describeRoadPlan } from "../road-plans";
 
 export const router = Router();
 
@@ -9,7 +10,7 @@ const mapLink = (lat: number, lng: number) => `https://www.google.com/maps/dir/?
 // GET /api/jobs/:job_code  -> ใบงานของไรเดอร์ (เปิดดูผ่านมือถือ)
 router.get("/:job_code", async (req, res) => {
   const [rows] = await pool.query(
-    `SELECT r.job_code, r.route_date, d.rider_id, d.name, d.phone, d.color,
+    `SELECT r.job_code, r.route_date, r.road_snapshot, d.rider_id, d.name, d.phone, d.color,
             o.order_id, o.customer_id, o.quantity_boxes, o.stop_seq,
             c.first_name, c.last_name, c.phone AS c_phone, c.address, c.latitude, c.longitude
      FROM delivery_routes r
@@ -26,7 +27,7 @@ router.get("/:job_code", async (req, res) => {
   const first = list[0];
   const stops: DispatchOrder[] = list.map((r) => ({ ...r, phone: r.c_phone }));
   const rider = { rider_id: first.rider_id, name: first.name, phone: first.phone, color: first.color };
-  const route = describePlan([stops], [rider]).routes[0]!;
+  const route = (await describeRoadPlan([stops], [rider], [first.road_snapshot])).routes[0]!;
 
   // ลิงก์นำทางทั้งเส้น: ร้าน -> จุดที่ 1 -> ... -> จุดสุดท้าย
   const pts = stops.map((s) => `${s.latitude},${s.longitude}`);
@@ -44,6 +45,9 @@ router.get("/:job_code", async (req, res) => {
     total_boxes: route.boxes,
     total_stops: route.stops.length,
     distance_km: route.distance_km,
+    path: route.path,
+    routing_source: route.routing_source,
+    shop: CENTER,
     finish_time: route.finish_time,
     steps: route.stops.map(
       (s) => `จุดที่ ${s.seq}: ส่งบ้านคุณ${s.customer.name} ${s.boxes} กล่อง (ถึงประมาณ ${s.eta})`

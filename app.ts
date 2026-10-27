@@ -5,6 +5,7 @@ import { router as orders } from "./controller/orders";
 import { router as dispatch } from "./controller/dispatch";
 import { router as jobs } from "./controller/jobs";
 import cors from "cors";
+import { RoadError } from "./road-network";
 
 export const app = express();
 
@@ -20,6 +21,7 @@ app.use("/api/jobs", jobs);
 app.use((_req, res) => res.status(404).json({ error: "ไม่พบ endpoint นี้" }));
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err?.type === "entity.parse.failed") return res.status(400).json({ error: "JSON ไม่ถูกต้อง" });
+  if (err instanceof RoadError) return res.status(err.status).json({ error: err.message });
   console.error(err);
   res.status(500).json({ error: "เกิดข้อผิดพลาดภายในเซิร์ฟเวอร์" });
 });
