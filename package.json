@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "npm run build && node --test tests/road-routing.cjs",
+    "test": "npm run build && node --test tests/road-routing.cjs tests/rider-capacity.cjs",
     "build": "tsc",
     "start": "node dist/server.js"
   },

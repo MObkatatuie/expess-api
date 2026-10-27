@@ -2,6 +2,7 @@ import { Router } from "express";
 import { ResultSetHeader } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { pool } from "../db";
+import { ensureRiderCapacity } from "../rider-capacity";
 import type { DispatchOrder, Rider } from "../routing";
 import { buildRoadPlans, describeRoadPlan, draftSignature, saveDraft, getDraft, deleteDraft } from "../road-plans";
 
@@ -35,8 +36,10 @@ router.post("/plans", async (req, res) => {
   const seed = req.query.seed !== undefined ? Number(req.query.seed) : Math.floor(Math.random() * 1e9);
   if (!Number.isSafeInteger(seed) || seed < 0) return res.status(400).json({ error: "seed ต้องเป็นจำนวนเต็มตั้งแต่ 0" });
 
-  const [orders, riders] = await Promise.all([loadOrders(), loadRiders()]);
+  const orders = await loadOrders();
   if (orders.length === 0) return res.status(400).json({ error: "ไม่มีออร์เดอร์ที่รอจัดส่ง" });
+  await ensureRiderCapacity(orders.length);
+  const riders = await loadRiders();
   const result = await buildRoadPlans(orders, riders, seed, count);
   if ("error" in result) return res.status(400).json({ error: result.error });
 

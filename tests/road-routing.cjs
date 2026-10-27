@@ -68,6 +68,7 @@ test('road routing, preview, confirmation and saved endpoints', async t => {
   });
   let dbOrders=structuredClone(orders), savedSnapshot, commits=0, rollbacks=0;
   const query=async (sql,args)=>{
+    if(sql.startsWith('SELECT COUNT(*) AS total FROM riders')) return [[{total:riders.length}]];
     if(sql.includes('SELECT o.order_id')) return [structuredClone(dbOrders)];
     if(sql.startsWith('SELECT rider_id')) return [structuredClone(riders)];
     if(sql.startsWith('INSERT INTO delivery_routes')) { savedSnapshot=args[6]; return [{insertId:7}]; }
